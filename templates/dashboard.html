@@ -95,10 +95,10 @@ nav{flex:1;padding:10px 0;}
     <div class="nl">Overview</div>
     <div class="ni active" onclick="showTab('dashboard',this)">&#9632; Dashboard</div>
     <div class="ni" onclick="showTab('updates',this)">&#9650; Site Updates</div>
-    <div class="ni" onclick="showTab('reports',this)">&#9654; Daily Reports</div>
+    <div class="ni" onclick="showTab('reports',this)">&#9654; Reports</div>
     <div class="nl" style="margin-top:8px">Tools</div>
     <div class="ni" onclick="showTab('submit',this)">+ Submit Update</div>
-    <div class="ni" onclick="showTab('chat',this)">&#9670; PM Assistant</div>
+    <div class="ni" onclick="showTab('chat',this)">&#9670; Site Assistant</div>
   </nav>
   <div class="sf"><div style="color:var(--co);font-size:11px;margin-bottom:2px">Active project</div><div class="pn">Al Barsha Tower</div><div class="pl">&#9679; Dubai, UAE &mdash; PROJ-001</div></div>
 </aside>
@@ -140,7 +140,7 @@ nav{flex:1;padding:10px 0;}
     <!-- REPORTS -->
     <div id="tab-reports" class="tab">
       <div class="card">
-        <div class="ch_"><div class="ct_">Daily Reports</div><button class="bsub" style="padding:6px 13px;font-size:12px" onclick="genReport()">Generate today</button></div>
+        <div class="ch_"><div class="ct_">Reports</div><button class="bsub" style="padding:6px 13px;font-size:12px" onclick="genReport()">Generate Report</button></div>
         <div class="cb" id="rep-body"><div class="em">Loading...</div></div>
       </div>
     </div>
@@ -164,7 +164,7 @@ nav{flex:1;padding:10px 0;}
     <!-- CHAT -->
     <div id="tab-chat" class="tab">
       <div class="card" style="max-width:560px">
-        <div class="ch_"><div class="ct_">PM Assistant</div></div>
+        <div class="ch_"><div class="ct_">Site Assistant</div></div>
         <div class="cm" id="chat-msgs">
           <div class="msg ai"><div class="mb">Hi! Ask me anything about today's site activity — issues, progress, actions needed.</div></div>
         </div>
@@ -267,7 +267,7 @@ async function loadReports() {
     const d  = await api(`/reports/${PID}`);
     const rs = d.reports||[];
     const b  = document.getElementById('rep-body');
-    if(!rs.length){ b.innerHTML='<div class="em">No reports yet. Click "Generate today".</div>'; return; }
+    if(!rs.length){ b.innerHTML='<div class="em">No reports yet. Click "Generate Report".</div>'; return; }
     b.innerHTML = rs.map(r=>`<div class="ri">
       <div class="rd_">${r.report_date} <span class="bdg b${r.rag_status==='Red'?'r':r.rag_status==='Amber'?'a':'g'}">${r.rag_status}</span></div>
       <div class="rp">${(r.content||'').slice(0,350)}${(r.content||'').length>350?'...':''}</div>
@@ -317,7 +317,7 @@ async function sendChat() {
   msgs.scrollTop=msgs.scrollHeight;
 }
 
-const TITLES={dashboard:'Dashboard',updates:'Site Updates',reports:'Daily Reports',submit:'Submit Update',chat:'PM Assistant'};
+const TITLES={dashboard:'Dashboard',updates:'Site Updates',reports:'Reports',submit:'Submit Update',chat:'Site Assistant'};
 function showTab(name,el){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.ni').forEach(n=>n.classList.remove('active'));
