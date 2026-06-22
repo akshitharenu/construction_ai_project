@@ -1,43 +1,25 @@
-"""
-webhook_server.py
------------------
-FastAPI entry point. Receives webhooks and API calls,
-runs them through Agentspan pipelines, returns results.
-
-Startup:
-  - Initialises OpenTelemetry tracer
-  - Connects the Agentspan runtime
-  - Serves the dashboard UI at /
-"""
-
 import json
 from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-from agentspan.agents import AgentRuntime
 
-from observability import init_tracer
 from config import settings
 
 app = FastAPI(title="ConstructAI — Multi-Agent Site Intelligence")
 TEMPLATES = Path(__file__).parent / "templates"
 
-# Agentspan runtime — shared across all requests
-_runtime = AgentRuntime()
-
 
 @app.on_event("startup")
 def on_startup():
-    init_tracer("construction-ai")
-    print("[STARTUP] OpenTelemetry tracer initialised")
-    print("[STARTUP] Agentspan runtime ready")
-
-
-@app.on_event("shutdown")
-def on_shutdown():
-    _runtime.__exit__(None, None, None)
+    try:
+        from observability import init_tracer
+        init_tracer("construction-ai")
+        print("[STARTUP] OpenTelemetry tracer initialised")
+    except Exception as e:
+        print(f"[STARTUP] OTEL skipped: {e}")
+    print("[STARTUP] ConstructAI ready")
 
 
 # ── Dashboard UI ─────────────────────────────────────────────────────────────
@@ -52,18 +34,15 @@ def health():
     return {"status": "ok", "service": "ConstructAI", "agents": 6}
 
 
-# ── Site update (WhatsApp / email / form) ────────────────────────────────────
+# ── Site update ───────────────────────────────────────────────────────────────
 
 @app.post("/update")
 async def submit_update(request: Request):
-    """
-    Receives a site update from any source.
-    Runs it through: ingestion_agent >> extraction_agent >> storage_agent
-    then fires alert_agent in parallel if needed.
-    """
-    from agents.pipeline import update_pipeline
+    from ai_processor.claude_client import extract_update
+    from storage.database import insert_update, insert_processed
+    from outputs.alerts import send_critical_alert
 
-    body = await request.json()
+    body       = await request.json()
     content    = body.get("content", "").strip()
     sender     = body.get("sender", "api")
     source     = body.get("source", "form")
@@ -72,87 +51,100 @@ async def submit_update(request: Request):
     if not content:
         return {"status": "error", "reason": "content is required"}
 
-    prompt = json.dumps({
-        "content": content,
-        "sender": sender,
-        "source": source,
-        "project_id": project_id,
-    })
+    try:
+        raw = insert_update(project_id, source, content, sender)
+        result = extract_update(content, project_id, source, sender)
+        insert_processed(
+            update_id=raw["id"],
+            project_id=project_id,
+            summary=result["summary"],
+            issues=result.get("issues", []),
+            severity=result["severity"],
+            delay_risk=result.get("delay_risk", False),
+            action_required=result.get("action_required"),
+        )
+        if result["severity"] == "critical":
+            try:
+                send_critical_alert(project_id, result["summary"], result.get("action_required"))
+            except Exception as e:
+                print(f"[ALERT] failed: {e}")
+        return {"status": "ok", "extracted": result}
+    except Exception as e:
+        print(f"[ERROR] /update: {e}")
+        return {"status": "error", "reason": str(e)}
 
-    result = _runtime.run(update_pipeline, prompt)
-    return {"status": "ok", "result": result.output if hasattr(result, "output") else str(result)}
 
+# ── WhatsApp webhook ──────────────────────────────────────────────────────────
 
 @app.post("/webhook/whatsapp")
 async def receive_whatsapp(request: Request):
-    """Twilio WhatsApp inbound webhook."""
-    from agents.pipeline import update_pipeline
+    from ai_processor.claude_client import extract_update
+    from storage.database import insert_update, insert_processed
 
-    data = await request.form()
+    data    = await request.form()
     content = data.get("Body", "").strip()
     sender  = data.get("From", "unknown")
-
     if not content:
         return {"status": "ignored"}
 
-    prompt = json.dumps({
-        "content": content,
-        "sender": sender,
-        "source": "whatsapp",
-        "project_id": settings.default_project_id,
-    })
+    raw    = insert_update(settings.default_project_id, "whatsapp", content, sender)
+    result = extract_update(content, settings.default_project_id, "whatsapp", sender)
+    insert_processed(update_id=raw["id"], project_id=settings.default_project_id,
+                     summary=result["summary"], issues=result.get("issues", []),
+                     severity=result["severity"], delay_risk=result.get("delay_risk", False),
+                     action_required=result.get("action_required"))
+    return {"status": "ok", "severity": result["severity"]}
 
-    result = _runtime.run(update_pipeline, prompt)
-    return {"status": "ok"}
 
+# ── Email webhook ─────────────────────────────────────────────────────────────
 
 @app.post("/webhook/email")
 async def receive_email(request: Request):
-    """SendGrid Inbound Parse webhook."""
-    from agents.pipeline import update_pipeline
+    from ai_processor.claude_client import extract_update
+    from storage.database import insert_update, insert_processed
 
-    data = await request.form()
+    data    = await request.form()
     content = (data.get("text") or data.get("html") or "").strip()
     sender  = data.get("from", "unknown")
-
     if not content:
         return {"status": "ignored"}
 
-    prompt = json.dumps({
-        "content": content,
-        "sender": sender,
-        "source": "email",
-        "project_id": settings.default_project_id,
-    })
-
-    result = _runtime.run(update_pipeline, prompt)
+    raw    = insert_update(settings.default_project_id, "email", content, sender)
+    result = extract_update(content, settings.default_project_id, "email", sender)
+    insert_processed(update_id=raw["id"], project_id=settings.default_project_id,
+                     summary=result["summary"], issues=result.get("issues", []),
+                     severity=result["severity"], delay_risk=result.get("delay_risk", False),
+                     action_required=result.get("action_required"))
     return {"status": "ok"}
 
 
-# ── Daily report ─────────────────────────────────────────────────────────────
+# ── Generate report ───────────────────────────────────────────────────────────
 
 @app.post("/report/generate")
 async def generate_report(request: Request):
-    """Trigger report generation on demand (also called by scheduler)."""
-    from agents.pipeline import report_pipeline
+    from ai_processor.claude_client import generate_daily_report
+    from storage.database import get_todays_updates, insert_daily_report
 
     body       = await request.json()
     project_id = body.get("project_id", settings.default_project_id)
     today      = date.today().isoformat()
 
-    result = _runtime.run(
-        report_pipeline,
-        json.dumps({"project_id": project_id, "report_date": today}),
-    )
-    return {"status": "ok", "result": result.output if hasattr(result, "output") else str(result)}
+    updates = get_todays_updates(project_id)
+    if not updates:
+        return {"report": "No updates received today.", "rag_status": "Green"}
+
+    report = generate_daily_report(project_id, today, updates)
+    rag    = "Red" if "Red" in report else "Amber" if "Amber" in report else "Green"
+    insert_daily_report(project_id, today, report, rag)
+    return {"report": report, "rag_status": rag}
 
 
-# ── PM Chatbot ───────────────────────────────────────────────────────────────
+# ── PM Chatbot ────────────────────────────────────────────────────────────────
 
 @app.post("/ask")
 async def ask_question(request: Request):
-    """PM asks a natural-language question about today's site activity."""
-    from agents.pipeline import chatbot_pipeline
+    from ai_processor.claude_client import answer_pm_question
+    from storage.database import get_todays_updates
 
     body       = await request.json()
     question   = body.get("question", "").strip()
@@ -161,8 +153,58 @@ async def ask_question(request: Request):
     if not question:
         return {"answer": "Please ask a question."}
 
-    result = _runtime.run(
-        chatbot_pipeline,
-        json.dumps({"project_id": project_id, "question": question}),
+    updates = get_todays_updates(project_id)
+    answer  = answer_pm_question(project_id, question, updates)
+    return {"answer": answer}
+
+
+# ── Fetch all updates for dashboard ──────────────────────────────────────────
+
+@app.get("/updates/{project_id}")
+async def get_updates(project_id: str):
+    from storage.database import get_supabase
+    sb = get_supabase()
+    result = (
+        sb.table("processed_updates")
+        .select("*, site_updates(source, sender, received_at, raw_content)")
+        .eq("project_id", project_id)
+        .order("processed_at", desc=True)
+        .limit(50)
+        .execute()
     )
-    return {"answer": result.output if hasattr(result, "output") else str(result)}
+    return {"updates": result.data}
+
+
+# ── Fetch reports for dashboard ───────────────────────────────────────────────
+
+@app.get("/reports/{project_id}")
+async def get_reports(project_id: str):
+    from storage.database import get_supabase
+    sb = get_supabase()
+    result = (
+        sb.table("daily_reports")
+        .select("*")
+        .eq("project_id", project_id)
+        .order("report_date", desc=True)
+        .limit(10)
+        .execute()
+    )
+    return {"reports": result.data}
+
+
+# ── Fetch stats for dashboard ─────────────────────────────────────────────────
+
+@app.get("/stats/{project_id}")
+async def get_stats(project_id: str):
+    from storage.database import get_supabase
+    from datetime import datetime
+    sb    = get_supabase()
+    today = datetime.utcnow().date().isoformat()
+
+    all_updates = sb.table("processed_updates").select("severity, delay_risk").eq("project_id", project_id).gte("processed_at", today).execute().data
+    total    = len(all_updates)
+    critical = sum(1 for u in all_updates if u["severity"] == "critical")
+    medium   = sum(1 for u in all_updates if u["severity"] == "medium")
+    low      = sum(1 for u in all_updates if u["severity"] == "low")
+
+    return {"total": total, "critical": critical, "medium": medium, "low": low}
