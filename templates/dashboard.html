@@ -140,7 +140,7 @@ nav{flex:1;padding:10px 0;}
     <!-- REPORTS -->
     <div id="tab-reports" class="tab">
       <div class="card">
-        <div class="ch_"><div class="ct_">Daily AI reports</div><button class="bsub" style="padding:6px 13px;font-size:12px" onclick="genReport()">Generate today</button></div>
+        <div class="ch_"><div class="ct_">Daily Reports</div><button class="bsub" style="padding:6px 13px;font-size:12px" onclick="genReport()">Generate today</button></div>
         <div class="cb" id="rep-body"><div class="em">Loading...</div></div>
       </div>
     </div>
@@ -164,9 +164,9 @@ nav{flex:1;padding:10px 0;}
     <!-- CHAT -->
     <div id="tab-chat" class="tab">
       <div class="card" style="max-width:560px">
-        <div class="ch_"><div class="ct_">PM Assistant</div><span class="bdg bo">Powered by Claude</span></div>
+        <div class="ch_"><div class="ct_">PM Assistant</div></div>
         <div class="cm" id="chat-msgs">
-          <div class="msg ai"><div class="mav">AI</div><div class="mb">Hi! Ask me anything about today's site activity — issues, progress, actions needed.</div></div>
+          <div class="msg ai"><div class="mb">Hi! Ask me anything about today's site activity — issues, progress, actions needed.</div></div>
         </div>
         <div class="cr">
           <input class="ci" id="chat-in" placeholder="What are the critical issues today?" onkeydown="if(event.key==='Enter')sendChat()">
@@ -277,7 +277,7 @@ async function loadReports() {
 
 async function genReport() {
   const b = document.getElementById('rep-body');
-  b.innerHTML='<div class="em">Generating AI report...</div>';
+  b.innerHTML='<div class="em">Generating report...</div>';
   try {
     const d = await api('/report/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id:PID})});
     b.innerHTML=`<div class="ri"><div class="rd_">Today <span class="bdg b${d.rag_status==='Red'?'r':d.rag_status==='Amber'?'a':'g'}">${d.rag_status}</span></div><div class="rp" style="white-space:pre-wrap">${d.report}</div></div>`;
@@ -290,7 +290,7 @@ async function submitUpdate() {
   const source  = document.getElementById('f-source').value;
   const fb      = document.getElementById('sfb');
   if(!content){ fb.textContent='Please enter update content.'; return; }
-  fb.style.color='var(--or)'; fb.textContent='Processing with AI...';
+  fb.style.color='var(--or)'; fb.textContent='Processing...';
   try {
     const d = await api('/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content,sender,source,project_id:PID})});
     fb.style.color='var(--gr)';
@@ -305,14 +305,14 @@ async function sendChat() {
   const q   = inp.value.trim(); if(!q) return;
   inp.value='';
   const msgs = document.getElementById('chat-msgs');
-  msgs.innerHTML+=`<div class="msg user"><div class="mav">PM</div><div class="mb">${q}</div></div>`;
-  msgs.innerHTML+=`<div class="msg ai" id="typ"><div class="mav">AI</div><div class="mb" style="color:var(--co)">Thinking...</div></div>`;
+  msgs.innerHTML+=`<div class="msg user"><div class="mb">${q}</div></div>`;
+  msgs.innerHTML+=`<div class="msg ai" id="typ"><div class="mb" style="color:var(--co)">Thinking...</div></div>`;
   msgs.scrollTop=msgs.scrollHeight;
   try {
     const d = await api('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,project_id:PID})});
-    document.getElementById('typ').outerHTML=`<div class="msg ai"><div class="mav">AI</div><div class="mb">${d.answer}</div></div>`;
+    document.getElementById('typ').outerHTML=`<div class="msg ai"><div class="mb">${d.answer}</div></div>`;
   } catch(e){
-    document.getElementById('typ').outerHTML=`<div class="msg ai"><div class="mav">AI</div><div class="mb">Error: ${e.message}</div></div>`;
+    document.getElementById('typ').outerHTML=`<div class="msg ai"><div class="mb">Error: ${e.message}</div></div>`;
   }
   msgs.scrollTop=msgs.scrollHeight;
 }
