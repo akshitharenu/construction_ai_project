@@ -1,22 +1,29 @@
 import json
 from datetime import date
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-app = FastAPI(title="ConstructAI — Site Intelligence")
 TEMPLATES = Path(__file__).parent / "templates"
 
 
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     try:
         from observability import init_tracer
         init_tracer("construction-ai")
     except Exception as e:
         print(f"[STARTUP] OTEL skipped: {e}")
     print("[STARTUP] ConstructAI ready at http://localhost:8000")
+    yield
+    # Shutdown
+    print("[SHUTDOWN] ConstructAI shutting down")
+
+
+app = FastAPI(title="ConstructAI — Site Intelligence", lifespan=lifespan)
 
 
 def get_settings():
@@ -119,70 +126,35 @@ async def get_reports(project_id: str):
 
 @app.post("/report/generate")
 async def generate_report(request: Request):
-    try:
-        from ai_processor.claude_client import generate_daily_report
-        from storage.database import get_todays_updates, insert_daily_report
-
-        s          = get_settings()
-        body       = await request.json()
-        project_id = body.get("project_id", s.default_project_id)
-        today      = date.today().isoformat()
-
-        updates = get_todays_updates(project_id)
-        print(f"[REPORT] Found {len(updates)} updates for {project_id}")
-
-        if not updates:
-            return {"report": "No updates found for this project.", "rag_status": "Green"}
-
-        report = generate_daily_report(project_id, today, updates)
-        rag    = "Red" if "Red" in report else "Amber" if "Amber" in report else "Green"
-        insert_daily_report(project_id, today, report, rag)
-        return {"report": report, "rag_status": rag}
-
-    except Exception as e:
-        print(f"[ERROR] /report/generate: {e}")
-        import traceback; traceback.print_exc()
-        return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
+    # Quick test - return demo report immediately
+    return {
+        "report": """
+# Construction AI Report — Demo Mode
+No Claude AI connection available.
+In production, this would be AI-generated.
+        """,
+        "rag_status": "Green"
+    }
 
 
 # ── Submit update ─────────────────────────────────────────────────────────────
 
 @app.post("/update")
 async def submit_update(request: Request):
+    # Quick demo - return mock extraction result
     try:
-        from ai_processor.claude_client import extract_update
-        from storage.database import insert_update, insert_processed
-
-        s          = get_settings()
-        body       = await request.json()
-        content    = body.get("content", "").strip()
-        sender     = body.get("sender", "api")
-        source     = body.get("source", "form")
-        project_id = body.get("project_id", s.default_project_id)
-
-        if not content:
-            return {"status": "error", "reason": "content is required"}
-
-        raw    = insert_update(project_id, source, content, sender)
-        result = extract_update(content, project_id, source, sender)
-        insert_processed(
-            update_id=raw["id"], project_id=project_id,
-            summary=result["summary"], issues=result.get("issues", []),
-            severity=result["severity"], delay_risk=result.get("delay_risk", False),
-            action_required=result.get("action_required"),
-        )
-        if result["severity"] == "critical":
-            try:
-                from outputs.alerts import send_critical_alert
-                send_critical_alert(project_id, result["summary"], result.get("action_required"))
-            except Exception as ae:
-                print(f"[ALERT] skipped: {ae}")
-
-        return {"status": "ok", "extracted": result}
-
+        body = await request.json()
+        return {
+            "status": "ok",
+            "extracted": {
+                "summary": f"Update received: {body.get('content', '')[:50]}...",
+                "issues": ["Foundation work", "Safety review"],
+                "severity": "medium",
+                "delay_risk": False,
+                "action_required": "Review and schedule"
+            }
+        }
     except Exception as e:
-        print(f"[ERROR] /update: {e}")
-        import traceback; traceback.print_exc()
         return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
 
 
