@@ -1,7 +1,3 @@
-"""
-storage/database.py
-Supabase client — all DB operations go through this module.
-"""
 from supabase import create_client, Client
 from config import settings
 
@@ -14,8 +10,6 @@ def get_supabase() -> Client:
         _client = create_client(settings.supabase_url, settings.supabase_anon_key)
     return _client
 
-
-# ── Site Updates ─────────────────────────────────────────────────────────────
 
 def insert_update(project_id: str, source: str, raw_content: str, sender: str) -> dict:
     sb = get_supabase()
@@ -30,13 +24,13 @@ def insert_update(project_id: str, source: str, raw_content: str, sender: str) -
 
 def insert_processed(update_id: str, project_id: str, summary: str,
                      issues: list, severity: str, delay_risk: bool,
-                     action_required: str | None) -> dict:
+                     action_required) -> dict:
     sb = get_supabase()
     result = sb.table("processed_updates").insert({
         "update_id": update_id,
         "project_id": project_id,
         "summary": summary,
-        "issues": issues,           # Supabase stores as JSONB
+        "issues": issues,
         "severity": severity,
         "delay_risk": delay_risk,
         "action_required": action_required,
@@ -45,14 +39,45 @@ def insert_processed(update_id: str, project_id: str, summary: str,
 
 
 def get_todays_updates(project_id: str) -> list[dict]:
+    """
+    Returns today's updates. If none exist today (e.g. demo/seed data),
+    falls back to the most recent 21 updates so the demo always works.
+    """
     sb = get_supabase()
     from datetime import date
     today = date.today().isoformat()
+
     result = (
         sb.table("processed_updates")
         .select("*")
         .eq("project_id", project_id)
         .gte("processed_at", today)
+        .execute()
+    )
+
+    if result.data:
+        return result.data
+
+    # Fallback: return latest 21 updates (for demo with seeded data)
+    fallback = (
+        sb.table("processed_updates")
+        .select("*")
+        .eq("project_id", project_id)
+        .order("processed_at", desc=True)
+        .limit(21)
+        .execute()
+    )
+    return fallback.data
+
+
+def get_all_updates(project_id: str, limit: int = 50) -> list[dict]:
+    sb = get_supabase()
+    result = (
+        sb.table("processed_updates")
+        .select("*, site_updates(source, sender, received_at, raw_content)")
+        .eq("project_id", project_id)
+        .order("processed_at", desc=True)
+        .limit(limit)
         .execute()
     )
     return result.data

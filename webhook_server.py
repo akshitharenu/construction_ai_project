@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-app = FastAPI(title="ConstructAI — Multi-Agent Site Intelligence")
+app = FastAPI(title="ConstructAI — Site Intelligence")
 TEMPLATES = Path(__file__).parent / "templates"
 
 
@@ -18,8 +18,6 @@ def on_startup():
         print(f"[STARTUP] OTEL skipped: {e}")
     print("[STARTUP] ConstructAI ready at http://localhost:8000")
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def get_settings():
     from config import settings
@@ -38,7 +36,7 @@ async def dashboard():
         html = (TEMPLATES / "dashboard.html").read_text(encoding="utf-8")
         return HTMLResponse(html)
     except Exception as e:
-        return HTMLResponse(f"<h1>Error loading dashboard</h1><pre>{e}</pre>", status_code=500)
+        return HTMLResponse(f"<h1>Error</h1><pre>{e}</pre>", status_code=500)
 
 
 @app.get("/health")
@@ -55,21 +53,18 @@ def debug():
             "supabase_url_set":  bool(s.supabase_url),
             "supabase_key_set":  bool(s.supabase_anon_key),
             "project_id":        s.default_project_id,
-            "supabase_url":      s.supabase_url[:30] + "..." if s.supabase_url else "NOT SET",
         }
     except Exception as e:
         return {"error": str(e)}
 
 
-# ── Stats ─────────────────────────────────────────────────────────────────────
+# ── Stats — uses ALL data for demo ────────────────────────────────────────────
 
 @app.get("/stats/{project_id}")
 async def get_stats(project_id: str):
     try:
-        from datetime import datetime
-        sb    = get_db()
-        today = datetime.utcnow().date().isoformat()
-        rows  = sb.table("processed_updates").select("severity").eq("project_id", project_id).gte("processed_at", today).execute().data
+        sb   = get_db()
+        rows = sb.table("processed_updates").select("severity").eq("project_id", project_id).execute().data
         total    = len(rows)
         critical = sum(1 for r in rows if r["severity"] == "critical")
         medium   = sum(1 for r in rows if r["severity"] == "medium")
@@ -120,6 +115,36 @@ async def get_reports(project_id: str):
         return JSONResponse({"reports": [], "error": str(e)})
 
 
+# ── Generate report ───────────────────────────────────────────────────────────
+
+@app.post("/report/generate")
+async def generate_report(request: Request):
+    try:
+        from ai_processor.claude_client import generate_daily_report
+        from storage.database import get_todays_updates, insert_daily_report
+
+        s          = get_settings()
+        body       = await request.json()
+        project_id = body.get("project_id", s.default_project_id)
+        today      = date.today().isoformat()
+
+        updates = get_todays_updates(project_id)
+        print(f"[REPORT] Found {len(updates)} updates for {project_id}")
+
+        if not updates:
+            return {"report": "No updates found for this project.", "rag_status": "Green"}
+
+        report = generate_daily_report(project_id, today, updates)
+        rag    = "Red" if "Red" in report else "Amber" if "Amber" in report else "Green"
+        insert_daily_report(project_id, today, report, rag)
+        return {"report": report, "rag_status": rag}
+
+    except Exception as e:
+        print(f"[ERROR] /report/generate: {e}")
+        import traceback; traceback.print_exc()
+        return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
+
+
 # ── Submit update ─────────────────────────────────────────────────────────────
 
 @app.post("/update")
@@ -146,17 +171,18 @@ async def submit_update(request: Request):
             severity=result["severity"], delay_risk=result.get("delay_risk", False),
             action_required=result.get("action_required"),
         )
-
         if result["severity"] == "critical":
             try:
                 from outputs.alerts import send_critical_alert
                 send_critical_alert(project_id, result["summary"], result.get("action_required"))
             except Exception as ae:
-                print(f"[ALERT] failed: {ae}")
+                print(f"[ALERT] skipped: {ae}")
 
         return {"status": "ok", "extracted": result}
+
     except Exception as e:
         print(f"[ERROR] /update: {e}")
+        import traceback; traceback.print_exc()
         return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
 
 
@@ -185,45 +211,28 @@ async def receive_whatsapp(request: Request):
         return JSONResponse({"status": "error"}, status_code=500)
 
 
-# ── Generate report ───────────────────────────────────────────────────────────
-
-@app.post("/report/generate")
-async def generate_report(request: Request):
-    try:
-        from ai_processor.claude_client import generate_daily_report
-        from storage.database import get_todays_updates, insert_daily_report
-        s          = get_settings()
-        body       = await request.json()
-        project_id = body.get("project_id", s.default_project_id)
-        today      = date.today().isoformat()
-        updates    = get_todays_updates(project_id)
-        if not updates:
-            return {"report": "No updates received today.", "rag_status": "Green"}
-        report  = generate_daily_report(project_id, today, updates)
-        rag     = "Red" if "Red" in report else "Amber" if "Amber" in report else "Green"
-        insert_daily_report(project_id, today, report, rag)
-        return {"report": report, "rag_status": rag}
-    except Exception as e:
-        print(f"[ERROR] /report/generate: {e}")
-        return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
-
-
-# ── PM Chatbot ────────────────────────────────────────────────────────────────
+# ── PM chatbot ────────────────────────────────────────────────────────────────
 
 @app.post("/ask")
 async def ask_question(request: Request):
     try:
         from ai_processor.claude_client import answer_pm_question
         from storage.database import get_todays_updates
+
         s          = get_settings()
         body       = await request.json()
         question   = body.get("question", "").strip()
         project_id = body.get("project_id", s.default_project_id)
+
         if not question:
             return {"answer": "Please ask a question."}
+
         updates = get_todays_updates(project_id)
+        print(f"[CHAT] {len(updates)} updates as context for: {question}")
         answer  = answer_pm_question(project_id, question, updates)
         return {"answer": answer}
+
     except Exception as e:
         print(f"[ERROR] /ask: {e}")
+        import traceback; traceback.print_exc()
         return JSONResponse({"answer": f"Error: {str(e)}"}, status_code=500)
