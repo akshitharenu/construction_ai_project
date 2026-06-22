@@ -208,3 +208,15 @@ async def get_stats(project_id: str):
     low      = sum(1 for u in all_updates if u["severity"] == "low")
 
     return {"total": total, "critical": critical, "medium": medium, "low": low}
+
+
+# ── Debug endpoint — shows what env vars are loaded ──────────────────────────
+@app.get("/debug")
+def debug():
+    return {
+        "anthropic_key_set": bool(settings.anthropic_api_key),
+        "supabase_url_set":  bool(settings.supabase_url),
+        "supabase_key_set":  bool(settings.supabase_anon_key),
+        "project_id":        settings.default_project_id,
+        "supabase_url":      settings.supabase_url[:30] + "..." if settings.supabase_url else "NOT SET",
+    }
