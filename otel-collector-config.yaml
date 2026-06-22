@@ -1,0 +1,38 @@
+# OpenTelemetry Collector config
+# Receives spans from the Python app and exports to Jaeger
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+  # Add service name attribute to all spans
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: "local"
+        action: upsert
+
+exporters:
+  # Jaeger for local trace viewing
+  otlp/jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+
+  # Log to console for debugging
+  logging:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [otlp/jaeger, logging]
